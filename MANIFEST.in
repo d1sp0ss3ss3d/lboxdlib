@@ -1,0 +1,4 @@
+# Exclude macOS metadata/resource fork files from sdists.
+global-exclude .DS_Store
+global-exclude ._*
+prune __MACOSX

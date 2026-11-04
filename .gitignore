@@ -1,0 +1,49 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build/distribution artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+.wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test/coverage/cache files
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Local environment/config
+.env
+.env.*
+*.local
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+
+# Sublime Text project files
+*.sublime-project
+*.sublime-workspace
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# macOS AppleDouble/resource-fork metadata files
+._*
+__MACOSX/
