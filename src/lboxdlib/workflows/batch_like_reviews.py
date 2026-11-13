@@ -6,7 +6,7 @@ Public API uses:
     start_page: first page/fragment to process, 1-based
     stop_page: last page/fragment to process, inclusive; None means until exhausted
     like_count: number of newly created likes to perform; None means no like cap
-    interval: minimum seconds between outbound review-like requests
+    interval: fixed seconds or a (min, max) range between review-like requests
 
 Convenience wrappers:
     like_num_reviews(...)
@@ -46,6 +46,7 @@ LETTERBOXD_BASE = "https://letterboxd.com"
 DEFAULT_ACTIVITY_URL = f"{LETTERBOXD_BASE}/activity/"
 
 SourceKind = Literal["activity", "reviews"]
+Interval = float | tuple[float, float]
 StopReason = Literal[
     "like_count_reached",
     "rate_limited",
@@ -104,7 +105,7 @@ class BatchLikeResult:
     start_page: int
     stop_page: int | None
     like_count: int | None
-    interval: float = 0.0
+    interval: Interval = 0.0
     min_rating: float | None = None
     max_rating: float | None = None
     pages_scanned: int = 0
@@ -195,7 +196,7 @@ def batch_like_reviews(
     like_count: int | None = None,
     verbose: bool = False,
     dry_run: bool = False,
-    interval: float = 15.0,
+    interval: Interval = 15.0,
     min_rating: float | None = None,
     max_rating: float | None = None,
     stop_after_consecutive_already_liked: int | None = None,
@@ -218,7 +219,8 @@ def batch_like_reviews(
         verbose: Print progress while scanning.
         dry_run: Discover candidates and stop points, but do not POST likes.
         interval: Minimum number of seconds between outbound review-like HTTP
-            requests. ``0`` disables interval throttling. The first request is
+            requests. A ``(min, max)`` pair samples a delay for each gap.
+            ``0`` disables interval throttling. The first request is
             immediate, retries also respect the interval, and no unnecessary
             trailing sleep occurs after the final like.
         min_rating: Inclusive minimum reviewer rating from 0.5 to 5.0 in
@@ -300,7 +302,7 @@ def batch_like_reviews_from_urls(
     stop_page: int | None = None,
     verbose: bool = False,
     dry_run: bool = False,
-    interval: float = 15.0,
+    interval: Interval = 15.0,
     min_rating: float | None = None,
     max_rating: float | None = None,
     stop_after_consecutive_already_liked: int | None = None,
@@ -480,9 +482,9 @@ def _iter_batch_like_source(
         like request.
         """
 
-        if interval > 0 and state.last_like_request_started is not None:
+        if _interval_enabled(interval) and state.last_like_request_started is not None:
             elapsed = time.monotonic() - state.last_like_request_started
-            remaining = interval - elapsed
+            remaining = _sample_interval(interval) - elapsed
             if remaining > 0:
                 if verbose:
                     print(f"  waiting {remaining:.2f}s before next like request")
@@ -624,7 +626,7 @@ def _iter_batch_like_source(
 
                 if (
                     not dry_run
-                    and interval == 0
+                    and not _interval_enabled(interval)
                     and sleep_after_attempts is not None
                     and sleep_after_attempts > 0
                     and sleep_time is not None
@@ -674,7 +676,7 @@ def like_num_reviews(
     stop_page: int | None = None,
     verbose: bool = False,
     dry_run: bool = False,
-    interval: float = 0.0,
+    interval: Interval = 0.0,
     min_rating: float | None = None,
     max_rating: float | None = None,
     retry_attempts: int = 3,
@@ -708,7 +710,7 @@ def like_page_range_reviews(
     like_count: int | None = None,
     verbose: bool = False,
     dry_run: bool = False,
-    interval: float = 0.0,
+    interval: Interval = 0.0,
     min_rating: float | None = None,
     max_rating: float | None = None,
     retry_attempts: int = 3,
@@ -741,7 +743,7 @@ def like_until_liked_reviews(
     like_count: int | None = None,
     verbose: bool = False,
     dry_run: bool = False,
-    interval: float = 0.0,
+    interval: Interval = 0.0,
     min_rating: float | None = None,
     max_rating: float | None = None,
     retry_attempts: int = 3,
@@ -1346,22 +1348,42 @@ def _validate_page_range(*, start_page: int, stop_page: int | None, like_count: 
         raise ValueError("like_count must be None or >= 0")
 
 
-def _validate_interval(interval: float) -> float:
-    """Validate and normalize the public per-request interval."""
+def _validate_interval(interval: Interval) -> Interval:
+    """Normalize a fixed interval or an inclusive (minimum, maximum) range."""
 
+    if isinstance(interval, (tuple, list)):
+        if len(interval) != 2:
+            raise ValueError("interval range must contain exactly two numbers")
+        low, high = (_validate_interval_value(value) for value in interval)
+        if low > high:
+            raise ValueError("interval range minimum must be <= maximum")
+        return (low, high)
+    return _validate_interval_value(interval)
+
+
+def _validate_interval_value(value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError("interval must contain finite numbers >= 0")
     try:
-        value = float(interval)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("interval must be a finite number >= 0") from exc
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("interval must contain finite numbers >= 0") from exc
+    if not math.isfinite(normalized) or normalized < 0:
+        raise ValueError("interval must contain finite numbers >= 0")
+    return normalized
 
-    if not math.isfinite(value) or value < 0:
-        raise ValueError("interval must be a finite number >= 0")
-    return value
+
+def _interval_enabled(interval: Interval) -> bool:
+    return (interval[1] if isinstance(interval, tuple) else interval) > 0
+
+
+def _sample_interval(interval: Interval) -> float:
+    return random.uniform(*interval) if isinstance(interval, tuple) else interval
 
 
 def _validate_legacy_sleep_options(
     *,
-    interval: float,
+    interval: Interval,
     sleep_after_attempts: int | None,
     sleep_time: float | None,
 ) -> None:
@@ -1371,7 +1393,7 @@ def _validate_legacy_sleep_options(
     if not legacy_used:
         return
 
-    if interval > 0:
+    if _interval_enabled(interval):
         raise ValueError(
             "interval cannot be combined with sleep_after_attempts or sleep_time"
         )

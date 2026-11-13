@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import inspect
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
 
-import lboxdlib.modules.batch_like_reviews as module
+module = import_module("lboxdlib.workflows.batch_like_reviews")
 
 
 class FakeClock:
@@ -43,20 +44,28 @@ def install_batch_fakes(monkeypatch: pytest.MonkeyPatch, candidates):
 
 
 def test_interval_is_exposed_by_batch_and_all_convenience_functions() -> None:
-    functions = (
-        module.batch_like_reviews,
-        module.like_num_reviews,
-        module.like_page_range_reviews,
-        module.like_until_liked_reviews,
+    functions_and_defaults = (
+        (module.batch_like_reviews, 15.0),
+        (module.batch_like_reviews_from_urls, 15.0),
+        (module.like_num_reviews, 0.0),
+        (module.like_page_range_reviews, 0.0),
+        (module.like_until_liked_reviews, 0.0),
     )
 
-    for function in functions:
+    for function, default in functions_and_defaults:
         parameter = inspect.signature(function).parameters["interval"]
-        assert parameter.default == 0.0
+        assert parameter.default == default
         assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_positive_interval_spaces_requests_without_trailing_sleep(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("interval", "delays"),
+    [(5, (5.0, 5.0)), ((3, 7), (4.0, 6.0))],
+    ids=["fixed", "range"],
+)
+def test_positive_interval_spaces_requests_without_trailing_sleep(
+    monkeypatch, interval, delays
+) -> None:
     install_batch_fakes(monkeypatch, [candidate(1), candidate(2), candidate(3)])
     clock = FakeClock()
     request_times: list[float] = []
@@ -70,17 +79,26 @@ def test_positive_interval_spaces_requests_without_trailing_sleep(monkeypatch) -
 
     monkeypatch.setattr(module, "_like_review", fake_like)
 
+    if isinstance(interval, tuple):
+        samples = iter(delays)
+
+        def sample_interval(low, high):
+            assert (low, high) == interval
+            return next(samples)
+
+        monkeypatch.setattr(module.random, "uniform", sample_interval)
+
     result = module.batch_like_reviews(
         object(),
         like_count=3,
-        interval=5,
+        interval=interval,
         retry_attempts=1,
     )
 
     assert result.liked == 3
-    assert result.interval == 5.0
-    assert request_times == [100.0, 105.0, 110.0]
-    assert clock.sleeps == [5.0, 5.0]
+    assert result.interval == interval
+    assert request_times == [100.0, 100.0 + delays[0], 100.0 + sum(delays)]
+    assert clock.sleeps == list(delays)
 
 
 def test_zero_interval_performs_no_interval_sleep(monkeypatch) -> None:
@@ -124,7 +142,7 @@ def test_retry_attempts_also_respect_interval(monkeypatch) -> None:
         attempts += 1
         request_times.append(clock.now)
         if attempts == 1:
-            raise RuntimeError("429 Too Many Requests")
+            raise RuntimeError("HTTP 503")
         return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(module, "_like_review", fake_like)
@@ -159,7 +177,10 @@ def test_like_num_reviews_forwards_interval(monkeypatch) -> None:
     assert captured["interval"] == 9.5
 
 
-@pytest.mark.parametrize("bad_interval", [-1, float("inf"), float("nan"), "not-a-number"])
+@pytest.mark.parametrize(
+    "bad_interval",
+    [-1, float("inf"), float("nan"), "not-a-number", (7, 3), (-1, 3), (3,), (1, 2, 3)],
+)
 def test_invalid_interval_is_rejected(bad_interval) -> None:
     with pytest.raises(ValueError, match="interval"):
         module.batch_like_reviews(object(), like_count=0, interval=bad_interval)

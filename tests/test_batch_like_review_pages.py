@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import sys
-import types
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
 
-try:
-    import curl_cffi  # noqa: F401
-except ModuleNotFoundError:  # Fake-session tests do not require curl_cffi.
-    curl_cffi = types.ModuleType("curl_cffi")
-    curl_cffi.requests = types.SimpleNamespace(Session=type("Session", (), {}))
-    sys.modules["curl_cffi"] = curl_cffi
+from lboxdlib.actions import likes as like_state
 
-import lboxdlib.modules.batch_like_reviews as batch
-import lboxdlib.modules.like_state as like_state
+batch = import_module("lboxdlib.workflows.batch_like_reviews")
 
 
 class FakeResponse:
@@ -120,7 +113,7 @@ def test_review_page_iterator_hydrates_every_candidate_before_yielding(
         captured["referer"] = referer
         return {"viewing:1": True, "viewing:2": False, "viewing:3": True}
 
-    monkeypatch.setattr(like_state, "get_review_like_states", fake_states)
+    monkeypatch.setattr(batch, "get_review_like_states", fake_states)
 
     pages_out = list(
         batch.iter_review_page_candidates(
@@ -194,12 +187,12 @@ def test_review_candidate_without_embedded_uid_is_resolved_before_metadata(
     )
 
     monkeypatch.setattr(
-        like_state,
+        batch,
         "get_viewing_id_from_review_url",
         lambda session, url: 77,
     )
     monkeypatch.setattr(
-        like_state,
+        batch,
         "get_review_like_states",
         lambda session, targets, *, referer, batch_size: {"viewing:77": False},
     )
@@ -231,7 +224,7 @@ def test_metadata_failure_prevents_review_like_requests(
     )
     monkeypatch.setattr(reviews_parser, "extract_reviews", lambda html: [review(1)])
     monkeypatch.setattr(
-        like_state,
+        batch,
         "get_review_like_states",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("metadata unavailable")),
     )
