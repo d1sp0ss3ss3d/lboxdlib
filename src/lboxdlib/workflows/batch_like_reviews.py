@@ -13,6 +13,9 @@ Convenience wrappers:
     like_page_range_reviews(...)
     like_until_liked_reviews(...)
 
+Multi-source scheduling:
+    batch_like_reviews_from_urls(...)
+
 Compact activity review-reference rows are deliberately ignored. Only embedded
 /full ReviewActivity rows from activity pages are considered.
 """
@@ -21,9 +24,11 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterator, Literal
+from typing import Any, Literal
 from urllib.parse import urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -122,6 +127,60 @@ class BatchLikeResult:
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
 
+@dataclass(slots=True)
+class MultiSourceBatchLikeResult:
+    """Aggregate outcome with individual results in input URL order.
+
+    A source's ``stop_reason`` remains ``None`` when the overall run stops
+    before that source is exhausted. Its ``like_count`` is uncapped; the cap
+    on this result applies across all sources.
+    """
+
+    source_results: list[BatchLikeResult]
+    like_count: int | None
+    min_batch_size: int
+    max_batch_size: int
+    seed: int | None
+    stop_reason: Literal[
+        "like_count_reached", "rate_limited", "authentication_failed", "sources_exhausted"
+    ] | None = None
+
+    @property
+    def liked(self) -> int:
+        return sum(result.liked for result in self.source_results)
+
+    @property
+    def like_attempts(self) -> int:
+        return sum(result.like_attempts for result in self.source_results)
+
+    @property
+    def pages_scanned(self) -> int:
+        return sum(result.pages_scanned for result in self.source_results)
+
+    @property
+    def failures(self) -> list[ReviewLikeFailure]:
+        return [failure for result in self.source_results for failure in result.failures]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "liked": self.liked,
+            "like_attempts": self.like_attempts,
+            "pages_scanned": self.pages_scanned,
+            "failures": [asdict(failure) for failure in self.failures],
+        }
+
+    def to_json(self, *, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
+
+
+@dataclass(slots=True)
+class _BatchLikeState:
+    signed_in_user: str | None
+    last_like_request_started: float | None = None
+    liked_keys: set[str] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -208,11 +267,186 @@ def batch_like_reviews(
         max_rating=max_rating,
     )
 
-    signed_in_user = _signed_in_user(session)
-
     if like_count == 0:
         result.stop_reason = "like_count_reached"
         return result
+
+    state = _BatchLikeState(signed_in_user=_signed_in_user(session))
+    for _ in _iter_batch_like_source(
+        session,
+        result,
+        state,
+        verbose=verbose,
+        dry_run=dry_run,
+        stop_after_consecutive_already_liked=stop_after_consecutive_already_liked,
+        sleep_after_attempts=sleep_after_attempts,
+        sleep_time=sleep_time,
+        retry_attempts=retry_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
+    ):
+        pass
+    return result
+
+
+def batch_like_reviews_from_urls(
+    session: Any,
+    *,
+    urls: Iterable[str],
+    like_count: int | None = None,
+    min_batch_size: int = 1,
+    max_batch_size: int = 5,
+    seed: int | None = None,
+    start_page: int = 1,
+    stop_page: int | None = None,
+    verbose: bool = False,
+    dry_run: bool = False,
+    interval: float = 15.0,
+    min_rating: float | None = None,
+    max_rating: float | None = None,
+    stop_after_consecutive_already_liked: int | None = None,
+    retry_attempts: int = 3,
+    retry_backoff_seconds: float = 2.0,
+) -> MultiSourceBatchLikeResult:
+    """Like reviews in pseudo-random batches drawn from multiple source URLs.
+
+    Each turn chooses an active source uniformly at random, excluding the last
+    chosen source while another is available, then creates a random number of
+    new likes between ``min_batch_size`` and ``max_batch_size`` (inclusive).
+    Skips and failures do not consume this quota. Each source resumes at its
+    next candidate on subsequent turns, preserving page order and pagination
+    cursors without fetching earlier pages again.
+
+    ``like_count`` caps new likes across the entire run. ``None`` processes all
+    sources to exhaustion. ``start_page`` and ``stop_page`` apply independently
+    to every source. Activity and review-page URLs may be mixed; duplicate
+    normalized URLs are removed while preserving input order. ``urls`` must be
+    a nonempty iterable of nonblank URL strings, not a single string.
+
+    ``seed`` initializes a private random generator for repeatable source and
+    batch-size selection given the same candidates and request outcomes. It
+    does not change Python's global random state. The default is unseeded.
+
+    Rating filters, own-review skipping, liked-state hydration, and retries
+    follow ``batch_like_reviews``. A shared ``interval`` applies to all outbound
+    review-like requests, including retries and source changes. Already-liked
+    reviews and reviews liked earlier in this run are skipped, including in
+    ``dry_run`` mode. Dry runs count proposed likes but never submit them.
+
+    A confirmed rate limit or authentication failure stops the whole run.
+    Other fetch errors retire only the affected source; other like failures
+    are recorded and scanning continues. The consecutive-already-liked stop
+    condition, when supplied, applies independently to each source.
+
+    Returns aggregate counts and per-source ``BatchLikeResult`` objects in
+    normalized input order. A turn may be shorter than its chosen size when a
+    source stops or the global like cap is reached.
+    """
+    _validate_page_range(start_page=start_page, stop_page=stop_page, like_count=like_count)
+    interval = _validate_interval(interval)
+    min_rating, max_rating = validate_review_rating_bounds(min_rating, max_rating)
+    _validate_batch_sizes(min_batch_size, max_batch_size)
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+        raise ValueError("seed must be an integer or None")
+    if stop_after_consecutive_already_liked is not None and (
+        isinstance(stop_after_consecutive_already_liked, bool)
+        or not isinstance(stop_after_consecutive_already_liked, int)
+        or stop_after_consecutive_already_liked < 1
+    ):
+        raise ValueError("stop_after_consecutive_already_liked must be an integer >= 1")
+    normalized_urls = _normalize_source_urls(urls)
+    result = MultiSourceBatchLikeResult(
+        source_results=[
+            BatchLikeResult(
+                url=url,
+                source=detect_source_kind(url),
+                start_page=start_page,
+                stop_page=stop_page,
+                like_count=None,
+                interval=interval,
+                min_rating=min_rating,
+                max_rating=max_rating,
+            )
+            for url in normalized_urls
+        ],
+        like_count=like_count,
+        min_batch_size=min_batch_size,
+        max_batch_size=max_batch_size,
+        seed=seed,
+    )
+    if like_count == 0:
+        result.stop_reason = "like_count_reached"
+        return result
+
+    rng = random.Random(seed)
+    state = _BatchLikeState(signed_in_user=_signed_in_user(session), liked_keys=set())
+    source_iters = [
+        _iter_batch_like_source(
+            session,
+            source_result,
+            state,
+            verbose=verbose,
+            dry_run=dry_run,
+            stop_after_consecutive_already_liked=stop_after_consecutive_already_liked,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+        )
+        for source_result in result.source_results
+    ]
+    active = list(range(len(source_iters)))
+    previous: int | None = None
+    total_liked = 0
+    try:
+        while active:
+            choices = [index for index in active if index != previous] or active
+            index = rng.choice(choices)
+            previous = index
+            batch_size = rng.randint(min_batch_size, max_batch_size)
+            if like_count is not None:
+                batch_size = min(batch_size, like_count - total_liked)
+            if verbose:
+                print(
+                    f"[batch-like] source={normalized_urls[index]} "
+                    f"batch_size={batch_size} total_liked={total_liked}"
+                )
+            for _ in range(batch_size):
+                try:
+                    next(source_iters[index])
+                except StopIteration:
+                    active.remove(index)
+                    reason = result.source_results[index].stop_reason
+                    if reason in {"rate_limited", "authentication_failed"}:
+                        result.stop_reason = reason
+                        return result
+                    break
+                total_liked += 1
+                if like_count is not None and total_liked >= like_count:
+                    result.stop_reason = "like_count_reached"
+                    return result
+        result.stop_reason = "sources_exhausted"
+        return result
+    finally:
+        for source_iter in source_iters:
+            source_iter.close()
+
+
+def _iter_batch_like_source(
+    session: Any,
+    result: BatchLikeResult,
+    state: _BatchLikeState,
+    *,
+    verbose: bool,
+    dry_run: bool,
+    stop_after_consecutive_already_liked: int | None,
+    retry_attempts: int,
+    retry_backoff_seconds: float,
+    sleep_after_attempts: int | None = None,
+    sleep_time: float | None = None,
+) -> Iterator[None]:
+    """Process one source, yielding after each new like so it can be paused."""
+    normalized_url = result.url
+    source = result.source
+    start_page, stop_page, like_count = result.start_page, result.stop_page, result.like_count
+    interval, min_rating, max_rating = result.interval, result.min_rating, result.max_rating
 
     if source == "activity":
         page_iter = iter_activity_review_candidates(
@@ -237,7 +471,6 @@ def batch_like_reviews(
 
     any_candidate = False
     consecutive_already_liked = 0
-    last_like_request_started: float | None = None
 
     def perform_like_request(candidate: ReviewLikeCandidate, target: int | str):
         """Send one like request while enforcing the configured minimum interval.
@@ -247,17 +480,15 @@ def batch_like_reviews(
         like request.
         """
 
-        nonlocal last_like_request_started
-
-        if interval > 0 and last_like_request_started is not None:
-            elapsed = time.monotonic() - last_like_request_started
+        if interval > 0 and state.last_like_request_started is not None:
+            elapsed = time.monotonic() - state.last_like_request_started
             remaining = interval - elapsed
             if remaining > 0:
                 if verbose:
                     print(f"  waiting {remaining:.2f}s before next like request")
                 time.sleep(remaining)
 
-        last_like_request_started = time.monotonic()
+        state.last_like_request_started = time.monotonic()
         return _like_review(session, target, referer=candidate.source_url)
 
     try:
@@ -271,7 +502,7 @@ def batch_like_reviews(
                 any_candidate = True
                 result.candidates_seen += 1
 
-                if _same_slug(candidate.owner, signed_in_user):
+                if _same_slug(candidate.owner, state.signed_in_user):
                     result.skipped_own_reviews += 1
                     consecutive_already_liked = 0
                     if verbose:
@@ -301,7 +532,16 @@ def batch_like_reviews(
                             )
                         continue
 
-                if candidate.already_liked is True:
+                candidate_keys = (
+                    _candidate_like_keys(candidate) if state.liked_keys is not None else set()
+                )
+                duplicate = (
+                    state.liked_keys is not None
+                    and not candidate_keys.isdisjoint(state.liked_keys)
+                )
+                if candidate.already_liked is True or duplicate:
+                    if state.liked_keys is not None:
+                        state.liked_keys.update(candidate_keys)
                     result.skipped_already_liked += 1
                     consecutive_already_liked += 1
                     if verbose:
@@ -311,7 +551,7 @@ def batch_like_reviews(
                         and consecutive_already_liked >= stop_after_consecutive_already_liked
                     ):
                         result.stop_reason = "consecutive_already_liked_reached"
-                        return result
+                        return
                     continue
 
                 consecutive_already_liked = 0
@@ -337,7 +577,7 @@ def batch_like_reviews(
                     result.like_attempts += 1
                     try:
                         _retry_call(
-                            lambda: perform_like_request(candidate, target),
+                            lambda candidate=candidate, target=target: perform_like_request(candidate, target),
                             retry_attempts=retry_attempts,
                             retry_backoff_seconds=retry_backoff_seconds,
                         )
@@ -360,7 +600,7 @@ def batch_like_reviews(
                             result.stop_reason = "rate_limited"
                             if verbose:
                                 print("[batch-like] stopped: Letterboxd rate limit reached")
-                            return result
+                            return
                         if _is_authentication_error(exc):
                             result.stop_reason = "authentication_failed"
                             if verbose:
@@ -368,12 +608,19 @@ def batch_like_reviews(
                                     "[batch-like] stopped: Letterboxd rejected the "
                                     "authenticated action request"
                                 )
-                            return result
+                            return
                         continue
+
+                if state.liked_keys is not None:
+                    state.liked_keys.update(candidate_keys)
 
                 if like_count is not None and result.liked >= like_count:
                     result.stop_reason = "like_count_reached"
-                    return result
+
+                yield None
+
+                if result.stop_reason is not None:
+                    return
 
                 if (
                     not dry_run
@@ -406,13 +653,16 @@ def batch_like_reviews(
                 print("[batch-like] stopped while fetching: authentication rejected")
         else:
             result.stop_reason = "no_more_pages" if any_candidate else "no_candidates"
-        return result
+        return
+    finally:
+        close = getattr(page_iter, "close", None)
+        if close is not None:
+            close()
 
     if stop_page is not None and result.pages_scanned >= max(0, stop_page - start_page + 1):
         result.stop_reason = "stop_page_reached"
     else:
         result.stop_reason = "no_more_pages" if any_candidate else "no_candidates"
-    return result
 
 
 def like_num_reviews(
@@ -554,8 +804,8 @@ def iter_activity_review_candidates(
     embedded ReviewActivity rows are yielded as candidates.
     """
 
-    from lboxdlib.parsers.activity import ReviewActivity, extract_activity
     from lboxdlib.fetchers.activity import activity_ajax_spec
+    from lboxdlib.parsers.activity import ReviewActivity, extract_activity
 
     normalized_url = _normalize_url(url)
     spec = activity_ajax_spec(session, normalized_url)
@@ -615,7 +865,7 @@ def iter_activity_review_candidates(
                 params.insert(0, ("after", after))
 
             response = _retry_call(
-                lambda: session.get(
+                lambda params=params: session.get(
                     spec.ajax_url,
                     params=params,
                     headers={
@@ -715,7 +965,7 @@ def iter_review_page_candidates(
         current_page = start_page
         while stop_page is None or current_page <= stop_page:
             html_pages = _retry_call(
-                lambda: fetch_standard_pages(
+                lambda current_page=current_page: fetch_standard_pages(
                     session,
                     normalized_url,
                     start_page=current_page,
@@ -989,6 +1239,44 @@ def _normalize_url(url: str) -> str:
     return urljoin(LETTERBOXD_BASE, text)
 
 
+def _normalize_source_urls(urls: Iterable[str]) -> list[str]:
+    if isinstance(urls, (str, bytes)):
+        raise ValueError("urls must be a nonempty iterable of URL strings, not a single string")
+    try:
+        values = iter(urls)
+    except TypeError as exc:
+        raise ValueError("urls must be a nonempty iterable of URL strings") from exc
+    normalized: dict[str, None] = {}
+    for url in values:
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("urls must contain only nonblank URL strings")
+        normalized[_normalize_url(url)] = None
+    if not normalized:
+        raise ValueError("urls must contain at least one URL")
+    return list(normalized)
+
+
+def _validate_batch_sizes(min_batch_size: int, max_batch_size: int) -> None:
+    for name, value in (("min_batch_size", min_batch_size), ("max_batch_size", max_batch_size)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be an integer >= 1")
+    if max_batch_size < min_batch_size:
+        raise ValueError("max_batch_size must be >= min_batch_size")
+
+
+def _candidate_like_keys(candidate: ReviewLikeCandidate) -> set[str]:
+    """Match overlapping candidates by viewing identity or canonical review URL."""
+    keys: set[str] = set()
+    if candidate.viewing_id is not None:
+        keys.add(f"viewing:{candidate.viewing_id}")
+    if candidate.viewing_uid:
+        keys.add(candidate.viewing_uid)
+    if candidate.review_url:
+        parsed = urlparse(_absolute_url(candidate.review_url))
+        keys.add(parsed._replace(query="", fragment="").geturl().rstrip("/"))
+    return keys
+
+
 def _absolute_url(url: str) -> str:
     return urljoin(LETTERBOXD_BASE, url)
 
@@ -1045,6 +1333,11 @@ def _activity_rows_from_html(html: str) -> list[Any]:
 
 
 def _validate_page_range(*, start_page: int, stop_page: int | None, like_count: int | None) -> None:
+    for name, value in (("start_page", start_page), ("stop_page", stop_page), ("like_count", like_count)):
+        if value is None and name != "start_page":
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer" + (" or None" if name != "start_page" else ""))
     if start_page < 1:
         raise ValueError("start_page must be >= 1")
     if stop_page is not None and stop_page < start_page:
@@ -1136,9 +1429,11 @@ def _retry_call(
 
 __all__ = [
     "BatchLikeResult",
+    "MultiSourceBatchLikeResult",
     "ReviewLikeCandidate",
     "ReviewLikeFailure",
     "batch_like_reviews",
+    "batch_like_reviews_from_urls",
     "like_num_reviews",
     "like_page_range_reviews",
     "like_until_liked_reviews",

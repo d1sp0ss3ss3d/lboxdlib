@@ -6,4 +6,4 @@ primitives live under ``lboxdlib.actions``, ``lboxdlib.fetch``, and
 project use.
 """
 
-from lboxdlib.modules.batch_like_reviews import *  # noqa: F401,F403
+from lboxdlib.workflows.batch_like_reviews import *  # noqa: F401,F403

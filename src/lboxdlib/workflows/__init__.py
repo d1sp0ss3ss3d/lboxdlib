@@ -2,9 +2,11 @@
 
 from lboxdlib.workflows.batch_like_reviews import (
     BatchLikeResult,
+    MultiSourceBatchLikeResult,
     ReviewLikeCandidate,
     ReviewLikeFailure,
     batch_like_reviews,
+    batch_like_reviews_from_urls,
     like_num_reviews,
     like_page_range_reviews,
     like_until_liked_reviews,
@@ -24,10 +26,12 @@ from lboxdlib.workflows.scrape_films import (
 
 __all__ = [
     "batch_like_reviews",
+    "batch_like_reviews_from_urls",
     "like_num_reviews",
     "like_page_range_reviews",
     "like_until_liked_reviews",
     "BatchLikeResult",
+    "MultiSourceBatchLikeResult",
     "ReviewLikeCandidate",
     "ReviewLikeFailure",
     "incoming_engagement_report",

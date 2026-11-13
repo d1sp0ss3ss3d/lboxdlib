@@ -48,6 +48,51 @@ Opinionated account-maintenance jobs and project-specific automations belong in 
 
 Reusable primitives used by those scripts remain in the library facades.
 
+### Randomized review liking from multiple URLs
+
+Use the multi-source workflow with an existing signed-in session:
+
+```python
+from lboxdlib.workflows import batch_like_reviews_from_urls
+
+result = batch_like_reviews_from_urls(
+    session,
+    urls=[
+        "https://letterboxd.com/alice/films/reviews/",
+        "https://letterboxd.com/bob/films/reviews/",
+        "https://letterboxd.com/activity/",
+    ],
+    like_count=30,       # total new likes across all sources
+    min_batch_size=1,
+    max_batch_size=5,    # inclusive number of new likes per source visit
+    seed=42,            # optional; omit for a fresh random schedule
+    interval=15,        # seconds between like requests across all sources
+    dry_run=True,       # preview proposed likes without submitting them
+    verbose=True,
+)
+print(result.liked, result.stop_reason)
+print(result.to_json())
+```
+
+Each turn randomly selects a different active source while alternatives remain,
+then likes a random number of reviews within the configured bounds. Sources
+resume at their next review when revisited; review order within each source is
+preserved. Already-liked reviews, duplicates across sources, filtered reviews,
+and failed likes do not consume the batch quota or total like count. In a dry
+run, `liked` counts proposed likes. Set `dry_run=False` to submit them.
+
+`start_page` and inclusive `stop_page` apply separately to every source.
+`min_rating`, `max_rating`, and `stop_after_consecutive_already_liked` work as in
+`batch_like_reviews`; the consecutive-already-liked threshold retires only that
+source. With `like_count=None`, processing continues until all sources stop.
+Rate limits and authentication failures stop the entire run; other fetch errors
+retire the affected source and are recorded in the result.
+
+`result.source_results` contains individual `BatchLikeResult` objects in input
+URL order, after removing duplicate normalized URLs. Aggregate `liked`,
+`like_attempts`, `pages_scanned`, and `failures` are available on the result and
+in its dictionary/JSON output. Existing single-URL functions remain available.
+
 ## Internal organization
 
 The deeper packages remain available during the migration:
