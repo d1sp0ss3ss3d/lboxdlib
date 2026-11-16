@@ -178,7 +178,7 @@ class MultiSourceBatchLikeResult:
 @dataclass(slots=True)
 class _BatchLikeState:
     signed_in_user: str | None
-    last_like_request_started: float | None = None
+    last_like_succeeded_at: float | None = None
     liked_keys: set[str] | None = None
 
 
@@ -218,11 +218,12 @@ def batch_like_reviews(
             ``None`` means no like-count cap.
         verbose: Print progress while scanning.
         dry_run: Discover candidates and stop points, but do not POST likes.
-        interval: Minimum number of seconds between outbound review-like HTTP
-            requests. A ``(min, max)`` pair samples a delay for each gap.
-            ``0`` disables interval throttling. The first request is
-            immediate, retries also respect the interval, and no unnecessary
-            trailing sleep occurs after the final like.
+        interval: Minimum number of seconds after a successful review like
+            before beginning the next like candidate. A ``(min, max)`` pair
+            samples one delay for each successful gap. ``0`` disables interval
+            throttling. The first request is immediate, retries use only
+            ``retry_backoff_seconds``, and no unnecessary trailing sleep occurs
+            after the final like.
         min_rating: Inclusive minimum reviewer rating from 0.5 to 5.0 in
             half-star increments. ``None`` means no lower bound.
         max_rating: Inclusive maximum reviewer rating from 0.5 to 5.0 in
@@ -329,8 +330,9 @@ def batch_like_reviews_from_urls(
     does not change Python's global random state. The default is unseeded.
 
     Rating filters, own-review skipping, liked-state hydration, and retries
-    follow ``batch_like_reviews``. A shared ``interval`` applies to all outbound
-    review-like requests, including retries and source changes. Already-liked
+    follow ``batch_like_reviews``. A shared ``interval`` applies once between
+    successful review likes, including across source changes. Retries use the
+    separate retry backoff and do not draw another interval. Already-liked
     reviews and reviews liked earlier in this run are skipped, including in
     ``dry_run`` mode. Dry runs count proposed likes but never submit them.
 
@@ -474,24 +476,17 @@ def _iter_batch_like_source(
     any_candidate = False
     consecutive_already_liked = 0
 
-    def perform_like_request(candidate: ReviewLikeCandidate, target: int | str):
-        """Send one like request while enforcing the configured minimum interval.
+    def wait_for_like_interval() -> None:
+        """Wait once between successful likes, never once per retry attempt."""
 
-        This helper is intentionally passed into ``_retry_call`` so every retry,
-        not merely every new candidate, is spaced from the preceding outbound
-        like request.
-        """
-
-        if _interval_enabled(interval) and state.last_like_request_started is not None:
-            elapsed = time.monotonic() - state.last_like_request_started
-            remaining = _sample_interval(interval) - elapsed
-            if remaining > 0:
-                if verbose:
-                    print(f"  waiting {remaining:.2f}s before next like request")
-                time.sleep(remaining)
-
-        state.last_like_request_started = time.monotonic()
-        return _like_review(session, target, referer=candidate.source_url)
+        if not _interval_enabled(interval) or state.last_like_succeeded_at is None:
+            return
+        elapsed = time.monotonic() - state.last_like_succeeded_at
+        remaining = _sample_interval(interval) - elapsed
+        if remaining > 0:
+            if verbose:
+                print(f"  waiting {remaining:.2f}s before next like request")
+            time.sleep(remaining)
 
     try:
         for page_number, candidates in page_iter:
@@ -578,11 +573,15 @@ def _iter_batch_like_source(
                     # alongside a recorded failure.
                     result.like_attempts += 1
                     try:
+                        wait_for_like_interval()
                         _retry_call(
-                            lambda candidate=candidate, target=target: perform_like_request(candidate, target),
+                            lambda candidate=candidate, target=target: _like_review(
+                                session, target, referer=candidate.source_url
+                            ),
                             retry_attempts=retry_attempts,
                             retry_backoff_seconds=retry_backoff_seconds,
                         )
+                        state.last_like_succeeded_at = time.monotonic()
                         result.liked += 1
                         if verbose:
                             print(f"  liked: {target}")
@@ -1463,3 +1462,4 @@ __all__ = [
     "iter_activity_review_candidates",
     "iter_review_page_candidates",
 ]
+

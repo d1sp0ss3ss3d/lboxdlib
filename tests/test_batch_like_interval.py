@@ -128,11 +128,12 @@ def test_zero_interval_performs_no_interval_sleep(monkeypatch) -> None:
     assert clock.sleeps == []
 
 
-def test_retry_attempts_also_respect_interval(monkeypatch) -> None:
-    install_batch_fakes(monkeypatch, [candidate(1)])
+def test_retry_attempts_use_backoff_without_drawing_more_intervals(monkeypatch) -> None:
+    install_batch_fakes(monkeypatch, [candidate(1), candidate(2)])
     clock = FakeClock()
     request_times: list[float] = []
     attempts = 0
+    interval_samples: list[tuple[float, float]] = []
 
     monkeypatch.setattr(module.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(module.time, "sleep", clock.sleep)
@@ -141,23 +142,30 @@ def test_retry_attempts_also_respect_interval(monkeypatch) -> None:
         nonlocal attempts
         attempts += 1
         request_times.append(clock.now)
-        if attempts == 1:
+        if target == 2 and attempts < 4:
             raise RuntimeError("HTTP 503")
         return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(module, "_like_review", fake_like)
 
+    def sample_interval(low, high):
+        interval_samples.append((low, high))
+        return 255.13
+
+    monkeypatch.setattr(module.random, "uniform", sample_interval)
+
     result = module.batch_like_reviews(
         object(),
-        like_count=1,
-        interval=7,
-        retry_attempts=2,
-        retry_backoff_seconds=0,
+        like_count=2,
+        interval=(18.9, 601.1),
+        retry_attempts=3,
+        retry_backoff_seconds=2,
     )
 
-    assert result.liked == 1
-    assert request_times == [100.0, 107.0]
-    assert clock.sleeps == [7.0]
+    assert result.liked == 2
+    assert request_times == [100.0, 355.13, 357.13, 361.13]
+    assert clock.sleeps == [255.13, 2, 4]
+    assert interval_samples == [(18.9, 601.1)]
 
 
 def test_like_num_reviews_forwards_interval(monkeypatch) -> None:
@@ -195,3 +203,4 @@ def test_interval_cannot_be_mixed_with_legacy_sleep_controls() -> None:
             sleep_after_attempts=1,
             sleep_time=2,
         )
+

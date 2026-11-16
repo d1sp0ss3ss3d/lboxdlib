@@ -204,7 +204,7 @@ def test_skips_and_failures_do_not_consume_batch_or_total_quota(monkeypatch):
     assert source.skipped_below_min_rating == source.skipped_above_max_rating == 1
 
 
-def test_interval_is_shared_across_source_switches_and_transient_retries(monkeypatch):
+def test_interval_is_shared_across_sources_but_not_reapplied_to_retries(monkeypatch):
     calls, _, _ = install_fakes(
         monkeypatch,
         {A: [(1, [candidate(1), candidate(2)])], B: [(1, [candidate(3, B)])]},
@@ -234,8 +234,8 @@ def test_interval_is_shared_across_source_switches_and_transient_retries(monkeyp
     )
 
     assert calls == [(A, 1), (A, 1), (B, 3), (A, 2)]
-    assert request_times == [100.0, 105.0, 110.0, 115.0]
-    assert sleeps == [2, 3, 5, 5]
+    assert request_times == [100.0, 102.0, 107.0, 112.0]
+    assert sleeps == [2, 5, 5]
     assert result.liked == result.like_attempts == 3
     assert result.failures == []
 
@@ -405,3 +405,4 @@ def test_single_source_entry_point_still_counts_new_likes_and_honors_its_cap(mon
     assert result.skipped_already_liked == 1
     assert result.stop_reason == "like_count_reached"
     assert closed == [A]
+
