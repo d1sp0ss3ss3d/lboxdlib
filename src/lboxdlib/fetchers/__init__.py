@@ -12,6 +12,7 @@ from lboxdlib.fetchers.activity import (
     fetch_review_likers,
 )
 from lboxdlib.fetchers.comments import fetch_comment_updates, fetch_comments_section
+from lboxdlib.fetchers.diary import fetch_diary
 from lboxdlib.fetchers.films import fetch_films, fetch_lids
 from lboxdlib.fetchers.reviews import fetch_reviews
 from lboxdlib.fetchers.users import (
@@ -25,6 +26,7 @@ from lboxdlib.fetchers.users import (
 )
 
 __all__ = [
+    "fetch_diary",
     "fetch_films",
     "fetch_comments_section",
     "fetch_comment_updates",

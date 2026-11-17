@@ -726,6 +726,12 @@ class ReviewSummary:
 
 @dataclass(slots=True)
 class DiaryEntry:
+    """One diary viewing, with ratings on the original integer 1–10 scale.
+
+    ``review_url`` links to written review content; a diary listing does not
+    supply that content in ``review``. Missing ratings are ``None``.
+    """
+
     # ---- identity ----
     viewing_id: int                 # e.g. 1192118314
     owner: str                      # e.g. "grryboy"
@@ -733,7 +739,7 @@ class DiaryEntry:
     # ---- film identity ----
     film_slug: str                  # "the-rip-2026"
     film_lid: Optional[str] = None  # e.g. "NP5y"
-    film_uid: str = None                    # TMDb film ID (Letterboxd internal)
+    film_uid: Optional[str] = None  # Letterboxd UID, e.g. "film:123"; not a TMDb ID
 
     # ---- diary content ----
     rating: Optional[int] = None    # 1–10 scale
@@ -746,6 +752,21 @@ class DiaryEntry:
     # ---- state flags (DOM-derived) ----
     watched: Optional[bool] = None
     in_watchlist: Optional[bool] = None
+
+    # ---- additional diary-page fields ----
+    film_name: Optional[str] = None
+    film_year: Optional[int] = None
+    viewing_uid: Optional[str] = None
+    review_lid: Optional[str] = None
+    url: Optional[str] = None  # Specific viewing URL, including repeat-viewing suffix
+    review_url: Optional[str] = None  # Present only when the page links a written review
+    rewatch: Optional[bool] = None
+    liked_film: Optional[bool] = None
+
+    @property
+    def rating_stars(self) -> Optional[float]:
+        """Return the rating on the 0.5–5 star scale, or None when unrated."""
+        return self.rating / 2 if self.rating is not None else None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
