@@ -2,6 +2,22 @@
 
 Letterboxd scraping, parsing, selection, list/hydration, relationship, and account-action helpers.
 
+## Diary pages
+
+```python
+from lboxdlib import LBoxdSession, fetch_diary
+
+session = LBoxdSession()  # Existing login/session configuration
+entries = fetch_diary(session, "https://letterboxd.com/m4xr3nn/diary/", pages=2)
+for entry in entries:
+    print(entry.viewing_date, entry.film_name, entry.rating_stars, entry.review_url)
+```
+
+Returns existing `DiaryEntry` records, extended with film details, viewing/review
+identifiers, review links, rewatch state, and like markers. Review text is not in
+the diary listing and remains `None`; the specific review-page URL is retained.
+See [Diary retrieval and parsing](docs/diary.md) for fields and offline parsing.
+
 ## Preferred public API
 
 Most users should start with package-root imports for the stable, commonly used objects:

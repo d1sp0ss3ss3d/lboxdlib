@@ -3,12 +3,14 @@
 from lboxdlib.parsers.activity import ActivityActor, extract_activity, extract_activity_items
 from lboxdlib.parsers.activity_summary import ActivitySummary, ReferencedUser
 from lboxdlib.parsers.comments import extract_comments
+from lboxdlib.parsers.diary import extract_diary
 from lboxdlib.parsers.films import extract_films, extract_lids
 from lboxdlib.parsers.members import extract_member_summaries, member_summary_from_dom
 from lboxdlib.parsers.reviews import extract_reviews
 from lboxdlib.parsers.users import extract_user_slugs, extract_users, slugs_for_pronouns
 
 __all__ = [
+    "extract_diary",
     "extract_activity",
     "extract_activity_items",
     "ActivityActor",

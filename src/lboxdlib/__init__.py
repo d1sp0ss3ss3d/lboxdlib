@@ -24,6 +24,8 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "get_csrf": ("lboxdlib.auth", "get_csrf"),
 
     # Common fetch operations
+    "fetch_diary": ("lboxdlib.fetchers.diary", "fetch_diary"),
+    "extract_diary": ("lboxdlib.parsers.diary", "extract_diary"),
     "fetch_films": ("lboxdlib.fetchers.films", "fetch_films"),
     "fetch_lids": ("lboxdlib.fetchers.films", "fetch_lids"),
     "fetch_reviews": ("lboxdlib.fetchers.reviews", "fetch_reviews"),
