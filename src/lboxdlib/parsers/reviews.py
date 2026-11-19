@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
 from lboxdlib.models.typedefs import ReviewSummary
+from lboxdlib.parsers.tags import REVIEW_SECTION, tags_from_review
 
 BASE_URL = "https://letterboxd.com"
 
@@ -28,24 +28,6 @@ def extract_reviews(html: str) -> list[ReviewSummary]:
     page_review_count, page_reviews_url = _review_count_and_url_from_page(soup)
     page_film_context = _film_context_from_page(soup)
 
-    review_articles = soup.select("article.production-viewing")
-
-    if review_articles:
-        reviews: list[ReviewSummary] = []
-
-        for article in review_articles:
-            review = _review_from_article(
-                article,
-                page_film_context=page_film_context,
-                page_review_count=page_review_count,
-                page_reviews_url=page_reviews_url,
-            )
-
-            if review:
-                reviews.append(review)
-
-        return reviews
-
     full_review = _review_from_full_page(
         soup,
         page_film_context=page_film_context,
@@ -53,7 +35,20 @@ def extract_reviews(html: str) -> list[ReviewSummary]:
         page_reviews_url=page_reviews_url,
     )
 
-    return [full_review] if full_review else []
+    if full_review:
+        return [full_review]
+
+    reviews: list[ReviewSummary] = []
+    for article in soup.select("article.production-viewing"):
+        review = _review_from_article(
+            article,
+            page_film_context=page_film_context,
+            page_review_count=page_review_count,
+            page_reviews_url=page_reviews_url,
+        )
+        if review:
+            reviews.append(review)
+    return reviews
 
 
 def _review_from_article(
@@ -90,6 +85,7 @@ def _review_from_article(
     rating_text = _rating_text_from_container(article)
 
     like_component = article.select_one(".like-link-target[data-likeable-identifier]")
+    likes_path = _attr(like_component, "data-likes-page")
     comments_link = article.select_one('a.metadata[href*="#comments"]')
 
     reviews_url = (
@@ -127,7 +123,7 @@ def _review_from_article(
         fullTextUrl=_attr(body, "data-full-text-url"),
 
         likesCount=_int_or_none(_attr(like_component, "data-count")),
-        likesUrl= BASE_URL + _attr(like_component, "data-likes-page"),
+        likesUrl=urljoin(BASE_URL, likes_path) if likes_path else None,
 
         commentsCount=_int_from_node(comments_link.select_one(".label") if comments_link else None),
         commentsUrl=_attr(comments_link, "href"),
@@ -143,7 +139,7 @@ def _review_from_full_page(
     page_review_count: int | None,
     page_reviews_url: str | None,
 ) -> ReviewSummary | None:
-    section = soup.select_one("section.review.js-review")
+    section = soup.select_one(REVIEW_SECTION)
 
     if not section:
         return None
@@ -159,7 +155,7 @@ def _review_from_full_page(
     owner_link = section.select_one(".person-summary a.name[href], .person-summary strong.name a[href]")
     owner = _owner_from_href(_attr(owner_link, "href")) or _owner_from_href(review_href)
 
-    owner_display_name = _clean_text(owner_link)
+    owner_display_name = _clean_text(owner_link) or None
 
     film_context = _film_context_from_container(section)
     film_context = _merge_film_context(film_context, page_film_context)
@@ -167,6 +163,7 @@ def _review_from_full_page(
     film_slug = film_context.get("filmSlug") or _film_slug_from_review_href(review_href)
 
     like_component = section.select_one(".like-link-target[data-likeable-identifier]")
+    likes_path = _attr(like_component, "data-likes-page")
     review_lid, viewing_uid, viewing_id = _review_identity_from_like_component(section)
 
     rating_text = _rating_text_from_container(section)
@@ -177,6 +174,7 @@ def _review_from_full_page(
         page_reviews_url
         or _reviews_url(owner, film_slug)
     )
+    tags = tags_from_review(section)
 
     return ReviewSummary(
         owner=owner,
@@ -209,12 +207,14 @@ def _review_from_full_page(
         fullTextUrl=_attr(body, "data-full-text-url"),
 
         likesCount=_int_or_none(_attr(like_component, "data-count")),
-        likesUrl=BASE_URL + _attr(like_component, "data-likes-page"),
+        likesUrl=urljoin(BASE_URL, likes_path) if likes_path else None,
 
         commentsCount=_int_from_text(_clean_text(comments_heading)),
         commentsUrl=_attr(comments_heading, "data-comments-link"),
 
-        tags=[_clean_text(a) for a in section.select("ul.tags a")],
+        tags=[tag.name for tag in tags],
+        tagDetails=tags,
+        isFullReview=True,
     )
 
 
@@ -476,9 +476,10 @@ def _json_attr(node: Tag | None, attr: str) -> dict[str, Any]:
         return {}
 
     try:
-        return json.loads(raw)
+        value = json.loads(raw)
     except json.JSONDecodeError:
         return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _attr(node: Tag | None, attr: str) -> str | None:

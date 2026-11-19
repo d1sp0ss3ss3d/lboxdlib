@@ -29,6 +29,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "fetch_films": ("lboxdlib.fetchers.films", "fetch_films"),
     "fetch_lids": ("lboxdlib.fetchers.films", "fetch_lids"),
     "fetch_reviews": ("lboxdlib.fetchers.reviews", "fetch_reviews"),
+    "fetch_tags": ("lboxdlib.fetchers.tags", "fetch_tags"),
     "fetch_users": ("lboxdlib.fetchers.users", "fetch_users"),
     "fetch_members": ("lboxdlib.fetchers.users", "fetch_members"),
     "fetch_following_users": ("lboxdlib.fetchers.users", "fetch_following_users"),
@@ -88,6 +89,7 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     # Common models
     "FilmSummary": ("lboxdlib.models.typedefs", "FilmSummary"),
     "ReviewSummary": ("lboxdlib.models.typedefs", "ReviewSummary"),
+    "TagSummary": ("lboxdlib.models.tags", "TagSummary"),
     "Comment": ("lboxdlib.models.comments", "Comment"),
     "CommentCollection": ("lboxdlib.models.comments", "CommentCollection"),
     "UserSummary": ("lboxdlib.parsers.users", "UserSummary"),

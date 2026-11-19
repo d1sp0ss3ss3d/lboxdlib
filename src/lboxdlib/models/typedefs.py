@@ -5,6 +5,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
+from lboxdlib.models.tags import TagSummary
+
 
 SharePolicy = Literal["You", "Anyone", "Friends"]
 ListAction = Literal["ADD", "DELETE", "UPDATE"]
@@ -686,6 +688,8 @@ class ReviewSummary:
     commentsUrl: str | None = None
 
     tags: list[str] = field(default_factory=list)
+    tagDetails: list[TagSummary] = field(default_factory=list)
+    isFullReview: bool = False
 
 
     def to_dict(self) -> dict[str, Any]:
@@ -721,6 +725,8 @@ class ReviewSummary:
             commentsCount=data.get("commentsCount"),
             commentsUrl=data.get("commentsUrl"),
             tags=list(data.get("tags") or []),
+            tagDetails=[TagSummary.from_dict(tag) for tag in data.get("tagDetails") or []],
+            isFullReview=bool(data.get("isFullReview", False)),
         )
 
 

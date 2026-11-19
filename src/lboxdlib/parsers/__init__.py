@@ -7,6 +7,7 @@ from lboxdlib.parsers.diary import extract_diary
 from lboxdlib.parsers.films import extract_films, extract_lids
 from lboxdlib.parsers.members import extract_member_summaries, member_summary_from_dom
 from lboxdlib.parsers.reviews import extract_reviews
+from lboxdlib.parsers.tags import extract_tags
 from lboxdlib.parsers.users import extract_user_slugs, extract_users, slugs_for_pronouns
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "extract_films",
     "extract_lids",
     "extract_reviews",
+    "extract_tags",
     "extract_users",
     "extract_user_slugs",
     "slugs_for_pronouns",

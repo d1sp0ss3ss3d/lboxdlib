@@ -15,6 +15,7 @@ from lboxdlib.fetchers.comments import fetch_comment_updates, fetch_comments_sec
 from lboxdlib.fetchers.diary import fetch_diary
 from lboxdlib.fetchers.films import fetch_films, fetch_lids
 from lboxdlib.fetchers.reviews import fetch_reviews
+from lboxdlib.fetchers.tags import fetch_tags
 from lboxdlib.fetchers.users import (
     determine_pronouns_for_users,
     diff_members,
@@ -32,6 +33,7 @@ __all__ = [
     "fetch_comment_updates",
     "fetch_lids",
     "fetch_reviews",
+    "fetch_tags",
     "fetch_users",
     "fetch_members",
     "fetch_following_users",

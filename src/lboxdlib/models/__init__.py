@@ -1,6 +1,7 @@
 """Domain/result models used throughout lboxdlib."""
 
 from lboxdlib.models.comments import Comment, CommentCollection
+from lboxdlib.models.tags import TagSummary
 from lboxdlib.models.typedefs import (
     BatchListOperationRequest,
     CreateListRequest,
@@ -46,5 +47,6 @@ __all__ = [
     "CreateListRequest",
     "BatchListOperationRequest",
     "ReviewSummary",
+    "TagSummary",
     "DiaryEntry",
 ]

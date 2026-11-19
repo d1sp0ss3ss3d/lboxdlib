@@ -35,6 +35,22 @@ The result has `similar`, `themes`, and `nanogenres` keys. Each value is a
 list of poster-derived `FilmSummary` records in Letterboxd's display order,
 including repeated appearances across the grids on that tab.
 
+## Full reviews and tags
+
+```python
+from lboxdlib import fetch_reviews, fetch_tags
+
+reviews = fetch_reviews(
+    session, "https://letterboxd.com/m4xr3nn/reviews/", pages=1, full_reviews=True
+)
+tags = fetch_tags(session, "https://letterboxd.com/search/tags/mormon+horror/")
+```
+
+Use `review.isFullReview` to identify successfully loaded detail pages.
+`review.tags` contains the display labels and `review.tagDetails` contains
+`TagSummary` records with their URL, slug, and optional member owner.
+`fetch_tags` also accepts a full review URL or a mixed search URL.
+
 ## Preferred public API
 
 Most users should start with package-root imports for the stable, commonly used objects:
