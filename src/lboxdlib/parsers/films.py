@@ -122,12 +122,12 @@ def film_from_lazy_poster(tag, user=None):
 
 def lazy_posters_from_page(page: str):
     soup = BeautifulSoup(page, "lxml")
-
-    return soup.find_all(
-        "div",
-        class_="react-component",
-        attrs={"data-component-class": "LazyPoster"},
-    )
+    selector = 'div.react-component[data-component-class="LazyPoster"]'
+    body = soup.body
+    if body is not None and "screen-productions-similar" in body.get("class", []):
+        # These pages also show the source film in the header and sidebar.
+        selector = f".poster-grid {selector}"
+    return soup.select(selector)
 
 
 def lid_from_lazy_poster(tag):

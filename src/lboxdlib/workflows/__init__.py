@@ -11,6 +11,7 @@ from lboxdlib.workflows.batch_like_reviews import (
     like_page_range_reviews,
     like_until_liked_reviews,
 )
+from lboxdlib.workflows.film_recommendations import fetch_film_recommendations
 from lboxdlib.workflows.incoming_engagement import incoming_engagement_report
 from lboxdlib.workflows.reciprocal_follow_cleanup import (
     ReciprocalCleanupResult,
@@ -34,6 +35,7 @@ __all__ = [
     "MultiSourceBatchLikeResult",
     "ReviewLikeCandidate",
     "ReviewLikeFailure",
+    "fetch_film_recommendations",
     "incoming_engagement_report",
     "unfollow_nonfollowers",
     "ReciprocalCleanupResult",

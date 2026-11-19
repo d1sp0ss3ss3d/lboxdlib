@@ -18,6 +18,23 @@ identifiers, review links, rewatch state, and like markers. Review text is not i
 the diary listing and remains `None`; the specific review-page URL is retained.
 See [Diary retrieval and parsing](docs/diary.md) for fields and offline parsing.
 
+## Film recommendations
+
+```python
+from lboxdlib import new_session
+from lboxdlib.workflows import fetch_film_recommendations
+
+with new_session() as session:
+    recommendations = fetch_film_recommendations(session, "wishmaster")
+
+for tab, films in recommendations.items():
+    print(tab, [film.display_title for film in films])
+```
+
+The result has `similar`, `themes`, and `nanogenres` keys. Each value is a
+list of poster-derived `FilmSummary` records in Letterboxd's display order,
+including repeated appearances across the grids on that tab.
+
 ## Preferred public API
 
 Most users should start with package-root imports for the stable, commonly used objects:
